@@ -1,35 +1,69 @@
 require 'rubygems'
 require 'httparty'
+require 'nokogiri'
 
 module Endicia
-  include HTTParty
-  
-  # We need the following to make requests
-  # RequesterID (string): Requester ID (also called Partner ID) uniquely identifies the system making the request. Endicia assigns this ID. The Test Server does not authenticate the RequesterID. Any text value of 1 to 50 characters is valid.
-  # AccountID (6 digits): Account ID for the Endicia postage account. The Test Server does not authenticate the AccountID. Any 6-digit value is valid.
-  # PassPhrase (string): Pass Phrase for the Endicia postage account. The Test Server does not authenticate the PassPhrase. Any text value of 1 to 64 characters is valid.
+ 
+  class API
+    include HTTParty
+	format :xml
+	
+	attr_accessor :default_options
+	  # We need the following to make requests
+	  # RequesterID (string): Requester ID (also called Partner ID) uniquely identifies the system making the request. Endicia assigns this ID. The Test Server does not authenticate the RequesterID. Any text value of 1 to 50 characters is valid.
+	  # AccountID (6 digits): Account ID for the Endicia postage account. The Test Server does not authenticate the AccountID. Any 6-digit value is valid.
+	  # PassPhrase (string): Pass Phrase for the Endicia postage account. The Test Server does not authenticate the PassPhrase. Any text value of 1 to 64 characters is valid.
 
-  # if we're in a Rails env, let's load the config file
-  if defined? Rails.root
-    rails_root = Rails.root.to_s 
-  elsif defined? RAILS_ROOT
-    rails_root = RAILS_ROOT 
-  end
-  @defaults = YAML.load_file(File.join(rails_root, 'config', 'endicia.yml'))[Rails.env].symbolize_keys if defined? rails_root and File.exist? "#{rails_root}/config/endicia.yml" 
-  @defaults = Hash.new if @defaults.nil?
+	  # if we're in a Rails env, let's load the config file
+	def initialize
+		if defined? Rails.root
+			rails_root = Rails.root.to_s 
+		elsif defined? RAILS_ROOT
+			rails_root = RAILS_ROOT 
+		end
+		@default_options = YAML.load_file(File.join(rails_root, 'config', 'endicia.yml'))[Rails.env].symbolize_keys if defined? rails_root and File.exist? "#{rails_root}/config/endicia.yml" 
+		@default_options = Hash.new if default_options.nil?
+    end
+	# We probably want the following arguments
+	# MailClass, WeightOz, MailpieceShape, Machinable, FromPostalCode
 
-  # We probably want the following arguments
-  # MailClass, WeightOz, MailpieceShape, Machinable, FromPostalCode
-  
-  format :xml
-  # example XML
-  # <LabelRequest><ReturnAddress1>884 Railroad Street, Suite C</ReturnAddress1><ReturnCity>Ypsilanti</ReturnCity><ReturnState>MI</ReturnState><FromPostalCode>48197</FromPostalCode><FromCity>Ypsilanti</FromCity><FromState>MI</FromState><FromCompany>VGKids</FromCompany><ToPostalCode>48197</ToPostalCode><ToAddress1>1237 Elbridge St</ToAddress1><ToCity>Ypsilanti</ToCity><ToState>MI</ToState><PartnerTransactionID>123</PartnerTransactionID><PartnerCustomerID>71212</PartnerCustomerID><MailClass>MediaMail</MailClass><Test>YES</Test><RequesterID>poopants</RequesterID><AccountID>792190</AccountID><PassPhrase>whiplash1</PassPhrase><WeightOz>10</WeightOz></LabelRequest>  
-
-  def self.get_label(opts={})
-    body = "labelRequestXML=" + @defaults.merge(opts).to_xml(:skip_instruct => true, :skip_types => true, :root => 'LabelRequest', :indent => 0)
-    result = self.post("https://www.envmgr.com/LabelService/EwsLabelService.asmx/GetPostageLabelXML", :body => body)
-    return Endicia::Label.new(result["LabelRequestResponse"])
-  end
+	
+	# example XML
+	  def get_label(opts={})
+		Rails.logger.debug @default_options.inspect
+	    @default_options.merge!(opts)
+		Rails.logger.debug @default_options.inspect
+		request = XmlNode.new('LabelRequest', :Test => @default_options[:Test], :LabelSize => @default_options[:LabelSize], :ImageFormat => @default_options[:ImageFormat], :LabelType => @default_options[:LabelType], :ImageRotation => @default_options[:ImageRotation]) do |label_request|
+          #label_request << XmlNode.new('Test', @default_options[:Test])
+		  label_request << XmlNode.new('AccountID', @default_options[:AccountID])
+          label_request << XmlNode.new('RequesterID', @default_options[:RequesterID])
+          label_request << XmlNode.new('PassPhrase', @default_options[:PassPhrase])
+          label_request << XmlNode.new('FromName', @default_options[:FromName])
+		  
+          label_request << XmlNode.new('FromCompany', @default_options[:FromCompany])
+          label_request << XmlNode.new('ReturnAddress1', @default_options[:ReturnAddress1])
+          label_request << XmlNode.new('FromCity', @default_options[:FromCity])
+          label_request << XmlNode.new('FromState', @default_options[:FromState])
+          label_request << XmlNode.new('FromPostalCode', @default_options[:FromPostalCode])
+		  
+          label_request << XmlNode.new('ToPostalCode', @default_options[:ToPostalCode])
+          label_request << XmlNode.new('ToName', @default_options[:ToName])
+          label_request << XmlNode.new('ToCompany', @default_options[:ToCompany])
+          label_request << XmlNode.new('ToAddress1', @default_options[:ToAddress1])
+          label_request << XmlNode.new('ToCity', @default_options[:ToCity])
+          label_request << XmlNode.new('ToState', @default_options[:ToState])
+          label_request << XmlNode.new('PartnerTransactionID',@default_options[:PartnerTransactionID])
+          label_request << XmlNode.new('PartnerCustomerID', @default_options[:PartnerCustomerID])
+          label_request << XmlNode.new('MailClass', @default_options[:MailClass])
+          label_request << XmlNode.new('WeightOz', @default_options[:WeightOz])
+        end
+		Rails.logger.debug request.to_s
+		body = "labelRequestXML=" + request.to_s
+		Rails.logger.debug body
+		result = self.class.post("https://www.envmgr.com/LabelService/EwsLabelService.asmx/GetPostageLabelXML", :body => body)
+		return Endicia::Label.new(result["LabelRequestResponse"])
+	  end
+  end 
   
   class Label
     attr_accessor :image, 
