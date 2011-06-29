@@ -61,7 +61,7 @@ module Endicia
 		Rails.logger.debug request.to_s
 		body = "labelRequestXML=" + request.to_s
 		Rails.logger.debug body
-		result = self.class.post("https://LabelServer.Endicia.com/LabelService/EwsLabelService.asmx/GetPostageLabelXML", :body => body)
+		result = self.class.post(@default_options[:Server], :body => body)
 		Rails.logger.debug result
 		return Endicia::Label.new(result["LabelRequestResponse"])
 	  end
@@ -77,7 +77,8 @@ module Endicia
                   :postmark_date, 
                   :postage_balance, 
                   :pic,
-                  :error_message
+                  :error_message,
+				  :cost_center
     def initialize(data)
       data.each do |k, v|
         k = "image" if k == 'Base64LabelImage'
