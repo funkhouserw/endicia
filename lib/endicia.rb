@@ -33,7 +33,7 @@ module Endicia
 		Rails.logger.debug @default_options.inspect
 	    @default_options.merge!(opts)
 		Rails.logger.debug @default_options.inspect
-		request = XmlNode.new('LabelRequest', :Test => @default_options[:Test], :LabelSize => @default_options[:LabelSize], :ImageFormat => @default_options[:ImageFormat], :LabelType => @default_options[:LabelType], :ImageRotation => @default_options[:ImageRotation]) do |label_request|
+		request = XmlNode.new('LabelRequest', :Test => @default_options[:Test], :LabelSize => @default_options[:LabelSize], :ImageFormat => @default_options[:ImageFormat], :LabelType => @default_options[:LabelType], :ImageRotation => @default_options[:ImageRotation], :CostCenter => @default_options[:CostCenter] ) do |label_request|
           #label_request << XmlNode.new('Test', @default_options[:Test])
 		      label_request << XmlNode.new('AccountID', @default_options[:AccountID]) if @default_options.has_key?(:AccountID) and @default_options[:AccountID].present?
           label_request << XmlNode.new('RequesterID', @default_options[:RequesterID]) if @default_options.has_key?(:RequesterID) and @default_options[:RequesterID].present?
@@ -57,7 +57,6 @@ module Endicia
           label_request << XmlNode.new('PartnerCustomerID', @default_options[:PartnerCustomerID]) if @default_options.has_key?(:PartnerCustomerID) and @default_options[:PartnerCustomerID].present?
           label_request << XmlNode.new('MailClass', @default_options[:MailClass]) if @default_options.has_key?(:MailClass) and @default_options[:MailClass].present?
           label_request << XmlNode.new('WeightOz', @default_options[:WeightOz]) if @default_options.has_key?(:WeightOz) and @default_options[:WeightOz].present?
-		  label_request << XmlNode.new('CostCenter', @default_options[:CostCenter]) if @default_options.has_key?(:CostCenter) and @default_options[:CostCenter].present?
         end
 		Rails.logger.debug request.to_s
 		body = "labelRequestXML=" + request.to_s
