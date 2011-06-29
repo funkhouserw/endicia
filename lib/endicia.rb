@@ -62,7 +62,7 @@ module Endicia
 		Rails.logger.debug request.to_s
 		body = "labelRequestXML=" + request.to_s
 		Rails.logger.debug body
-		result = self.class.post("https://www.envmgr.com/LabelService/EwsLabelService.asmx/GetPostageLabelXML", :body => body)
+		result = self.class.post("https://LabelServer.Endicia.com/LabelService/EwsLabelService.asmx/GetPostageLabelXML", :body => body)
 		return Endicia::Label.new(result["LabelRequestResponse"])
 	  end
   end 
