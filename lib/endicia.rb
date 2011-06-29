@@ -58,11 +58,11 @@ module Endicia
           label_request << XmlNode.new('MailClass', @default_options[:MailClass]) if @default_options.has_key?(:MailClass) and @default_options[:MailClass].present?
           label_request << XmlNode.new('WeightOz', @default_options[:WeightOz]) if @default_options.has_key?(:WeightOz) and @default_options[:WeightOz].present?
         end
-		Rails.logger.debug request.to_s
+		#Rails.logger.debug request.to_s
 		body = "labelRequestXML=" + request.to_s
-		Rails.logger.debug body
+		#Rails.logger.debug body
 		result = self.class.post(@default_options[:Server], :body => body)
-		Rails.logger.debug result
+		#Rails.logger.debug result
 		return Endicia::Label.new(result["LabelRequestResponse"])
 	  end
   end 
