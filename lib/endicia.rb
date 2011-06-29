@@ -57,6 +57,7 @@ module Endicia
           label_request << XmlNode.new('PartnerCustomerID', @default_options[:PartnerCustomerID]) if @default_options.has_key?(:PartnerCustomerID) and @default_options[:PartnerCustomerID].present?
           label_request << XmlNode.new('MailClass', @default_options[:MailClass]) if @default_options.has_key?(:MailClass) and @default_options[:MailClass].present?
           label_request << XmlNode.new('WeightOz', @default_options[:WeightOz]) if @default_options.has_key?(:WeightOz) and @default_options[:WeightOz].present?
+		  label_request << XmlNode.new('CostCenter', @default_options[:CostCenter]) if @default_options.has_key?(:CostCenter) and @default_options[:CostCenter].present?
         end
 		Rails.logger.debug request.to_s
 		body = "labelRequestXML=" + request.to_s
