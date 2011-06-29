@@ -33,7 +33,7 @@ module Endicia
 		Rails.logger.debug @default_options.inspect
 	    @default_options.merge!(opts)
 		Rails.logger.debug @default_options.inspect
-		request = XmlNode.new('LabelRequest', :Test => @default_options[:Test], :LabelSize => @default_options[:LabelSize], :ImageFormat => @default_options[:ImageFormat], :LabelType => @default_options[:LabelType], :ImageRotation => @default_options[:ImageRotation], :CostCenter => @default_options[:CostCenter] ) do |label_request|
+		request = XmlNode.new('LabelRequest', :Test => @default_options[:Test], :LabelSize => @default_options[:LabelSize], :ImageFormat => @default_options[:ImageFormat], :LabelType => @default_options[:LabelType], :ImageRotation => @default_options[:ImageRotation] ) do |label_request|
           #label_request << XmlNode.new('Test', @default_options[:Test])
 		      label_request << XmlNode.new('AccountID', @default_options[:AccountID]) if @default_options.has_key?(:AccountID) and @default_options[:AccountID].present?
           label_request << XmlNode.new('RequesterID', @default_options[:RequesterID]) if @default_options.has_key?(:RequesterID) and @default_options[:RequesterID].present?
@@ -62,6 +62,7 @@ module Endicia
 		body = "labelRequestXML=" + request.to_s
 		Rails.logger.debug body
 		result = self.class.post("https://LabelServer.Endicia.com/LabelService/EwsLabelService.asmx/GetPostageLabelXML", :body => body)
+		Rails.logger.debug result
 		return Endicia::Label.new(result["LabelRequestResponse"])
 	  end
   end 
