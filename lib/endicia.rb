@@ -60,9 +60,9 @@ module Endicia
         end
 		#Rails.logger.debug request.to_s
 		body = "labelRequestXML=" + request.to_s
-		#Rails.logger.debug body
+		Rails.logger.debug body
 		result = self.class.post(@default_options[:Server], :body => body)
-		#Rails.logger.debug result
+		Rails.logger.debug result
 		return Endicia::Label.new(result["LabelRequestResponse"])
 	  end
   end 
