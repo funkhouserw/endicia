@@ -1,89 +1,335 @@
 require 'rubygems'
 require 'httparty'
-require 'nokogiri'
+
+require 'active_support/core_ext'
+require 'builder'
+require 'uri'
+
+require 'endicia/label'
+require 'endicia/rails_helper'
 
 module Endicia
- 
-  class API
-    include HTTParty
-	format :xml
-	
-	attr_accessor :default_options
-	  # We need the following to make requests
-	  # RequesterID (string): Requester ID (also called Partner ID) uniquely identifies the system making the request. Endicia assigns this ID. The Test Server does not authenticate the RequesterID. Any text value of 1 to 50 characters is valid.
-	  # AccountID (6 digits): Account ID for the Endicia postage account. The Test Server does not authenticate the AccountID. Any 6-digit value is valid.
-	  # PassPhrase (string): Pass Phrase for the Endicia postage account. The Test Server does not authenticate the PassPhrase. Any text value of 1 to 64 characters is valid.
-
-	  # if we're in a Rails env, let's load the config file
-	def initialize
-		if defined? Rails.root
-			rails_root = Rails.root.to_s 
-		elsif defined? RAILS_ROOT
-			rails_root = RAILS_ROOT 
-		end
-		@default_options = YAML.load_file(File.join(rails_root, 'config', 'endicia.yml'))[Rails.env].symbolize_keys if defined? rails_root and File.exist? "#{rails_root}/config/endicia.yml" 
-		@default_options = Hash.new if default_options.nil?
-    end
-	# We probably want the following arguments
-	# MailClass, WeightOz, MailpieceShape, Machinable, FromPostalCode
-
-	
-	# example XML
-	  def get_label(opts={})
-		Rails.logger.debug @default_options.inspect
-	    @default_options.merge!(opts)
-		Rails.logger.debug @default_options.inspect
-		request = XmlNode.new('LabelRequest', :Test => @default_options[:Test], :LabelSize => @default_options[:LabelSize], :ImageFormat => @default_options[:ImageFormat], :LabelType => @default_options[:LabelType], :ImageRotation => @default_options[:ImageRotation] ) do |label_request|
-          #label_request << XmlNode.new('Test', @default_options[:Test])
-		      label_request << XmlNode.new('AccountID', @default_options[:AccountID]) if @default_options.has_key?(:AccountID) and @default_options[:AccountID].present?
-          label_request << XmlNode.new('RequesterID', @default_options[:RequesterID]) if @default_options.has_key?(:RequesterID) and @default_options[:RequesterID].present?
-          label_request << XmlNode.new('PassPhrase', @default_options[:PassPhrase]) if @default_options.has_key?(:PassPhrase) and @default_options[:PassPhrase].present?
-          
-		      label_request << XmlNode.new('FromName', @default_options[:FromName]) if @default_options.has_key?(:FromName) and @default_options[:FromName].present?
-          label_request << XmlNode.new('FromCompany', @default_options[:FromCompany]) if @default_options.has_key?(:FromCompany) and @default_options[:FromCompany].present?
-          label_request << XmlNode.new('ReturnAddress1', @default_options[:ReturnAddress1]) if @default_options.has_key?(:ReturnAddress1) and @default_options[:ReturnAddress1].present?
-          label_request << XmlNode.new('FromCity', @default_options[:FromCity]) if @default_options.has_key?(:FromCity) and @default_options[:FromCity].present?
-          label_request << XmlNode.new('FromState', @default_options[:FromState]) if @default_options.has_key?(:FromState) and @default_options[:FromState].present?
-          label_request << XmlNode.new('FromPostalCode', @default_options[:FromPostalCode]) if @default_options.has_key?(:FromPostalCode) and @default_options[:FromPostalCode].present?
-		  
-          label_request << XmlNode.new('ToPostalCode', @default_options[:ToPostalCode]) if @default_options.has_key?(:ToPostalCode) and @default_options[:ToPostalCode].present?
-          label_request << XmlNode.new('ToName', @default_options[:ToName]) if @default_options.has_key?(:ToName) and @default_options[:ToName].present?
-          label_request << XmlNode.new('ToCompany', @default_options[:ToCompany]) if @default_options.has_key?(:ToCompany) and @default_options[:ToCompany].present?
-          label_request << XmlNode.new('ToAddress1', @default_options[:ToAddress1]) if @default_options.has_key?(:ToAddress1) and @default_options[:ToAddress1].present?
-		      label_request << XmlNode.new('ToAddress2', @default_options[:ToAddress2]) if @default_options.has_key?(:ToAddress2) and @default_options[:ToAddress2].present?
-          label_request << XmlNode.new('ToCity', @default_options[:ToCity]) if @default_options.has_key?(:ToCity) and @default_options[:ToCity].present?
-          label_request << XmlNode.new('ToState', @default_options[:ToState]) if @default_options.has_key?(:ToState) and @default_options[:ToState].present?
-          label_request << XmlNode.new('PartnerTransactionID',@default_options[:PartnerTransactionID]) if @default_options.has_key?(:PartnerTransactionID) and @default_options[:PartnerTransactionID].present?
-          label_request << XmlNode.new('PartnerCustomerID', @default_options[:PartnerCustomerID]) if @default_options.has_key?(:PartnerCustomerID) and @default_options[:PartnerCustomerID].present?
-          label_request << XmlNode.new('MailClass', @default_options[:MailClass]) if @default_options.has_key?(:MailClass) and @default_options[:MailClass].present?
-          label_request << XmlNode.new('WeightOz', @default_options[:WeightOz]) if @default_options.has_key?(:WeightOz) and @default_options[:WeightOz].present?
-        end
-		#Rails.logger.debug request.to_s
-		body = "labelRequestXML=" + request.to_s
-		Rails.logger.debug body
-		result = self.class.post(@default_options[:Server], :body => body)
-		Rails.logger.debug result
-		return Endicia::Label.new(result["LabelRequestResponse"])
-	  end
-  end 
+  include HTTParty
+  extend RailsHelper
   
-  class Label
-    attr_accessor :image, 
-                  :status, 
-                  :tracking_number, 
-                  :final_postage, 
-                  :transaction_date_time, 
-                  :transaction_id, 
-                  :postmark_date, 
-                  :postage_balance, 
-                  :pic,
-                  :error_message,
-				  :cost_center
-    def initialize(data)
-      data.each do |k, v|
-        k = "image" if k == 'Base64LabelImage'
-        send(:"#{k.tableize.singularize}=", v) if !k['xmlns']
+  # We need the following to make requests
+  # RequesterID (string): Requester ID (also called Partner ID) uniquely identifies the system making the request. Endicia assigns this ID. The Test Server does not authenticate the RequesterID. Any text value of 1 to 50 characters is valid.
+  # AccountID (6 digits): Account ID for the Endicia postage account. The Test Server does not authenticate the AccountID. Any 6-digit value is valid.
+  # PassPhrase (string): Pass Phrase for the Endicia postage account. The Test Server does not authenticate the PassPhrase. Any text value of 1 to 64 characters is valid.
+
+  # We probably want the following arguments
+  # MailClass, WeightOz, MailpieceShape, Machinable, FromPostalCode
+  
+  format :xml
+  # example XML
+  # <LabelRequest><ReturnAddress1>884 Railroad Street, Suite C</ReturnAddress1><ReturnCity>Ypsilanti</ReturnCity><ReturnState>MI</ReturnState><FromPostalCode>48197</FromPostalCode><FromCity>Ypsilanti</FromCity><FromState>MI</FromState><FromCompany>VGKids</FromCompany><ToPostalCode>48197</ToPostalCode><ToAddress1>1237 Elbridge St</ToAddress1><ToCity>Ypsilanti</ToCity><ToState>MI</ToState><PartnerTransactionID>123</PartnerTransactionID><PartnerCustomerID>71212</PartnerCustomerID><MailClass>MediaMail</MailClass><Test>YES</Test><RequesterID>poopants</RequesterID><AccountID>792190</AccountID><PassPhrase>whiplash1</PassPhrase><WeightOz>10</WeightOz></LabelRequest>  
+
+  # Request a shipping label.
+  #
+  # Accepts a hash of options in the form:
+  # { :NodeOrAttributeName => "value", ... }
+  #
+  # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 3-1
+  # for available options.
+  #
+  # Note: options should be specified in a "flat" hash, they should not be
+  # formated to fit the nesting of the XML.
+  #
+  # If you are using rails, any applicable options specified in
+  # config/endicia.yml will be used as defaults. For example:
+  #
+  #     development:
+  #       Test: YES
+  #       AccountID: 123
+  #       ...
+  #
+  # Returns a Endicia::Label object.
+  def self.get_label(opts={})
+    opts = defaults.merge(opts)
+    opts[:Test] ||= "NO"
+    url = "#{label_service_url(opts)}/GetPostageLabelXML"
+    insurance = opts.delete(:InsuredMail)
+
+    root_attributes = {
+      :LabelType => opts.delete(:LabelType) || "Default",
+      :Test => opts.delete(:Test),
+      :LabelSize => opts.delete(:LabelSize),
+      :ImageFormat => opts.delete(:ImageFormat)
+    }
+    
+    xml = Builder::XmlMarkup.new
+    body = "labelRequestXML=" + xml.LabelRequest(root_attributes) do |xm|
+      opts.each { |key, value| xm.tag!(key, value) }
+      xm.Services({ :InsuredMail => insurance }) if insurance
+    end
+    
+    result = self.post(url, :body => body)
+    return Endicia::Label.new(result)
+  end
+  
+  # Change your account pass phrase. This is a required step to move to
+  # production use after requesting an account.
+  #
+  # Accepts the new phrase and a hash of options in the form:
+  #
+  #     { :Name => "value", ... }
+  #
+  # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 5-1
+  # for available/required options.
+  #
+  # Note: options should be specified in a "flat" hash, they should not be
+  # formated to fit the nesting of the XML.
+  #
+  # If you are using rails, any applicable options specified in
+  # config/endicia.yml will be used as defaults. For example:
+  #
+  #     development:
+  #       Test: YES
+  #       AccountID: 123
+  #       ...
+  #
+  # Returns a hash in the form:
+  #
+  #     {
+  #       :success => true, # or false
+  #       :error_message => "the message", # or nil
+  #       :raw_response => <string representation of the HTTParty::Response object>
+  #     }
+  def self.change_pass_phrase(new_phrase, options = {})
+    xml = Builder::XmlMarkup.new
+    body = "changePassPhraseRequestXML=" + xml.ChangePassPhraseRequest do |xml|
+      authorize_request(xml, options)
+      xml.NewPassPhrase new_phrase
+      xml.RequestID "CPP#{Time.now.to_f}"
+    end
+
+    url = "#{label_service_url(options)}/ChangePassPhraseXML"
+    result = self.post(url, { :body => body })
+    parse_result(result, "ChangePassPhraseRequestResponse")
+  end
+
+  # Add postage to your account (submit a RecreditRequest). This is a required
+  # step to move to production use after requesting an account and changing
+  # your pass phrase.
+  #
+  # Accepts the amount (in dollars) and a hash of options in the form:
+  #
+  #     { :Name => "value", ... }
+  #
+  # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 5-1
+  # for available/required options.
+  #
+  # Note: options should be specified in a "flat" hash, they should not be
+  # formated to fit the nesting of the XML.
+  #
+  # If you are using rails, any applicable options specified in
+  # config/endicia.yml will be used as defaults. For example:
+  #
+  #     development:
+  #       Test: YES
+  #       AccountID: 123
+  #       ...
+  #
+  # Returns a hash in the form:
+  #
+  #     {
+  #       :success => true, # or false
+  #       :error_message => "the message", # or nil if no error
+  #       :raw_response => <string representation of the HTTParty::Response object>
+  #     }
+  def self.buy_postage(amount, options = {})
+    xml = Builder::XmlMarkup.new
+    body = "recreditRequestXML=" + xml.RecreditRequest do |xml|
+      authorize_request(xml, options)
+      xml.RecreditAmount amount
+      xml.RequestID "BP#{Time.now.to_f}"
+    end
+
+    url = "#{label_service_url(options)}/BuyPostageXML"
+    result = self.post(url, { :body => body })
+    parse_result(result, "RecreditRequestResponse")
+  end
+  
+  # Given a tracking number, return a status message for the shipment.
+  #
+  # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 12-1
+  # for available/required options.
+  #
+  # Note: options should be specified in a "flat" hash, they should not be
+  # formated to fit the nesting of the XML.
+  #
+  # If you are using rails, any applicable options specified in
+  # config/endicia.yml will be used as defaults. For example:
+  #
+  #     development:
+  #       Test: YES
+  #       AccountID: 123
+  #       ...
+  #
+  # Returns a hash in the form:
+  #
+  #     {
+  #       :success => true, # or false
+  #       :error_message => "the message", # or nil if no error
+  #       :status => "the package status", # or nil if error
+  #       :raw_response => <string representation of the HTTParty::Response object>
+  #     }
+  def self.status_request(tracking_number, options = {})
+    xml = Builder::XmlMarkup.new.StatusRequest do |xml|
+      xml.AccountID(options[:AccountID] || defaults[:AccountID])
+      xml.PassPhrase(options[:PassPhrase] || defaults[:PassPhrase])
+      xml.Test(options[:Test] || defaults[:Test] || "NO")
+      xml.StatusList { |xml| xml.PICNumber(tracking_number) }
+    end
+
+    params = { :method => 'StatusRequest', :XMLInput => URI.encode(xml) }
+    result = self.get(els_service_url(params))
+
+    response = {
+      :success => false,
+      :error_message => nil,
+      :status => nil,
+      :raw_response => result.inspect
+    }
+
+    # TODO: It is possible to make a batch status request, currently this only
+    #       supports one at a time. The response that comes back is not parsed
+    #       well by HTTParty. So we have to assume there is only one tracking
+    #       number in order to parse it with a regex.
+    
+    if result && result = result['StatusResponse']
+      unless response[:error_message] = result['ErrorMsg']
+        result = result['StatusList']['PICNumber']
+        response[:status] = result.match(/<Status>(.+)<\/Status>/)[1]
+        status_code = result.match(/<StatusCode>(.+)<\/StatusCode>/)[1]
+        response[:success] = (status_code.to_s != '-1')
       end
     end
+    
+    response 
+  end
+  
+  # Given a tracking number and package location code,
+  # return a carrier pickup confirmation.
+  #
+  # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 15-1
+  # for available/required options, and package location codes.
+  #
+  # If you are using rails, any applicable options specified in
+  # config/endicia.yml will be used as defaults. For example:
+  #
+  #     development:
+  #       Test: YES
+  #       AccountID: 123
+  #       ...
+  #
+  # Returns a hash in the form:
+  #
+  #     {
+  #       :success => true, # or false
+  #       :error_message => "the message", # or nil if no error message
+  #       :error_code => "usps error code", # or nil if no error
+  #       :error_description => "usps error description", # or nil if no error
+  #       :day_of_week => "pickup day of week (ex: Monday)",
+  #       :date => "xx/xx/xxxx", # date of pickup,
+  #       :confirmation_number => "confirmation number of the pickup", # save this!
+  #       :raw_response => <string representation of the HTTParty::Response object>
+  #     }
+  def self.carrier_pickup_request(tracking_number, package_location, options = {})
+    xml = Builder::XmlMarkup.new.CarrierPickupRequest do |xml|
+      xml.AccountID(options.delete(:AccountID) || defaults[:AccountID])
+      xml.PassPhrase(options.delete(:PassPhrase) || defaults[:PassPhrase])
+      xml.Test(options.delete(:Test) || defaults[:Test] || "NO")
+      xml.PackageLocation(package_location)
+      xml.PickupList { |xml| xml.PICNumber(tracking_number) }
+      options.each { |key, value| xml.tag!(key, value) }
+    end
+
+    params = { :method => 'CarrierPickupRequest', :XMLInput => URI.encode(xml) }
+    result = self.get(els_service_url(params))
+    
+    response = {
+      :success => false,
+      :raw_response => result.inspect
+    }
+    
+    # TODO: this is some nasty logic...
+    if result && result = result["CarrierPickupRequestResponse"]
+      unless response[:error_message] = result['ErrorMsg']
+        if result = result["Response"]
+          if error = result.delete("Error")
+            response[:error_code] = error["Number"]
+            response[:error_description] = error["Description"]
+          else
+            response[:success] = true
+          end
+          result.each { |key, value| response[key.underscore.to_sym] = value }
+        end
+      end
+    end
+    
+    response
+  end
+  
+  private
+
+  # Given a builder object, add the auth nodes required for many api calls.
+  # Will pull values from options hash or defaults if not found.
+  def self.authorize_request(xml_builder, options = {})
+    requester_id = options[:RequesterID] || defaults[:RequesterID]
+    account_id   = options[:AccountID]   || defaults[:AccountID]
+    pass_phrase  = options[:PassPhrase]  || defaults[:PassPhrase]
+    
+    xml_builder.RequesterID requester_id
+    xml_builder.CertifiedIntermediary do |xml_builder|
+      xml_builder.AccountID account_id
+      xml_builder.PassPhrase pass_phrase
+    end
+  end
+  
+  # Return the url for making requests.
+  # Pass options hash with :Test => "YES" to return the url of the test server
+  # (this matches the Test attribute/node value for most API calls).
+  def self.label_service_url(options = {})
+    test = (options[:Test] || defaults[:Test] || "NO").upcase == "YES"
+    url = test ? "https://www.envmgr.com" : "https://LabelServer.Endicia.com"
+    "#{url}/LabelService/EwsLabelService.asmx"
+  end
+  
+  # Some requests use the ELS service url. This URL is used for requests that
+  # can accept GET, and have params passed via URL instead of a POST body.
+  # Pass a hash of params to have them converted to a &key=value string and
+  # appended to the URL.
+  def self.els_service_url(params = {})
+    params = params.to_a.map { |i| "#{i[0]}=#{i[1]}"}.join('&')
+    "http://www.endicia.com/ELS/ELSServices.cfc?wsdl&#{params}"
+  end
+
+  def self.defaults
+    if rails? && @defaults.nil?
+      config_file = File.join(rails_root, 'config', 'endicia.yml')
+      if File.exist?(config_file)
+        @defaults = YAML.load_file(config_file)[rails_env].symbolize_keys
+      end
+    end
+  
+    @defaults || {}
+  end
+
+  def self.parse_result(result, root)
+    parsed_result = {
+      :success => false,
+      :error_message => nil,
+      :raw_response => result.inspect
+    }
+    
+    if result && result[root]
+      root = result[root]
+      parsed_result[:error_message] = root["ErrorMessage"]
+      parsed_result[:success] = root["Status"] && root["Status"].to_s == "0"
+    end
+    
+    parsed_result
   end
 end
+

@@ -14,6 +14,9 @@ doc
 # jeweler generated
 pkg
 
+# rvm
+.rvmrc
+
 # Have editor/IDE/OS specific files you need to ignore? Consider using a global gitignore: 
 #
 # * Create a file at ~/.gitignore
@@ -46,3 +49,9 @@ pkg
 
 # For rubinius:
 #*.rbc
+
+# Sample labels created by integration tests
+test/images/*.gif
+test/images/*.jpg
+test/images/*.png
+test/images/*.pdf
