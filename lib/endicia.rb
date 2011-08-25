@@ -54,7 +54,8 @@ module Endicia
       :LabelType => opts.delete(:LabelType) || "Default",
       :Test => opts.delete(:Test),
       :LabelSize => opts.delete(:LabelSize),
-      :ImageFormat => opts.delete(:ImageFormat)
+      :ImageFormat => opts.delete(:ImageFormat),
+	  :ImageRotation => opts.delete(:ImageRotation)
     }
     
     xml = Builder::XmlMarkup.new
