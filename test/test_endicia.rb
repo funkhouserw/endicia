@@ -4,7 +4,12 @@ require 'ostruct'
 require 'nokogiri'
 
 module TestEndiciaHelper
-  def expect_label_request_attribute(key, value, returns = {})
+  def fake_response(hash = {}, body = "")
+    hash.stubs(:body).returns(body)
+    hash
+  end
+  
+  def expect_label_request_attribute(key, value, returns = fake_response)
     Endicia.expects(:post).with do |request_url, options|
       doc = Nokogiri::XML(options[:body].sub("labelRequestXML=", ""))
       !doc.css("LabelRequest[#{key}='#{value}']").empty?
@@ -14,7 +19,7 @@ module TestEndiciaHelper
   def expect_request_url(url)
     Endicia.expects(:post).with do |request_url, options|
       request_url == url
-    end.returns({})
+    end.returns(fake_response)
   end
   
   def assert_label_request_attributes(key, values)
@@ -76,9 +81,30 @@ class TestEndicia < Test::Unit::TestCase
         Endicia.expects(:post).with do |url, options|
           doc = Nokogiri::XML(options[:body].sub("labelRequestXML=", ""))
           !doc.css("LabelRequest > Services[InsuredMail=#{value}]").empty?
-        end.returns({})
+        end.returns(fake_response)
         Endicia.get_label({ :InsuredMail => value })
       end
+    end
+    
+    should "raise if requesting insurance for jewelry to an excluded zip" do
+      %w(10036 10017 94102 94108).each do |zip|
+        options = { :InsuredMail => "Endicia", :ToPostalCode => zip, :Jewelry => true }
+        assert_raise(Endicia::InsuranceError, /#{zip}/) { Endicia.get_label(options) }
+      end
+    end
+    
+    should "return an Endicia::Label object" do
+      assert_kind_of Endicia::Label, Endicia.get_label
+    end
+    
+    should "save the request body on the returned label object" do
+      request_body = nil
+      Endicia.expects(:post).with do |url, params|
+        request_body = params[:body]
+      end.returns(fake_response)
+      
+      the_label = Endicia.get_label
+      assert_equal request_body, the_label.request_body
     end
   end
   
@@ -114,30 +140,38 @@ class TestEndicia < Test::Unit::TestCase
     setup do
       # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf
       # Table 3-2: LabelRequestResponse XML Elements
-      @response = { "LabelRequestResponse" => {
-        "Status" => 123,
-        "ErrorMessage" => "If there's an error it would be here",
-        "Base64LabelImage" => Base64.encode64("the label image"),
-        "TrackingNumber" => "abc123",
-        "PIC" => "abcd1234",
-        "FinalPostage" => 1.2,
-        "TransactionID" => 1234,
-        "TransactionDateTime" => "20110102030405",
-        "CostCenter" => 12345,
-        "ReferenceID" => "abcde12345",
-        "PostmarkDate" => "20110102",
-        "PostageBalance" => 3.4
-      }}
+      @response = fake_response({
+        "LabelRequestResponse" => {
+          "Status" => 123,
+          "ErrorMessage" => "If there's an error it would be here",
+          "Base64LabelImage" => Base64.encode64("the label image"),
+          "TrackingNumber" => "abc123",
+          "PIC" => "abcd1234",
+          "FinalPostage" => 1.2,
+          "TransactionID" => 1234,
+          "TransactionDateTime" => "20110102030405",
+          "CostCenter" => 12345,
+          "ReferenceID" => "abcde12345",
+          "PostmarkDate" => "20110102",
+          "PostageBalance" => 3.4
+        }
+      })
     end
   
     should "initialize with relevant data from an endicia api response without error" do
       assert_nothing_raised { Endicia::Label.new(@response) }
     end
     
-    should "include raw response" do
-      @response.stubs(:inspect).returns("the raw response")
+    should "include response body" do
+      @response.stubs(:body).returns("the response body")
       the_label = Endicia::Label.new(@response)
-      assert_equal "the raw response", the_label.raw_response
+      assert_equal "the response body", the_label.response_body
+    end
+    
+    should "strip image data from #response_body" do
+      @response.stubs(:body).returns("<data><one>two</one><Base64LabelImage>binary data</Base64LabelImage></data>")
+      the_label = Endicia::Label.new(@response)
+      assert_equal "<data><one>two</one><Base64LabelImage>[data]</Base64LabelImage></data>", the_label.response_body
     end
   end
   
@@ -188,7 +222,7 @@ class TestEndicia < Test::Unit::TestCase
           doc.ChangePassPhraseRequest.CertifiedIntermediary.PassPhrase.content == "oldPassPhrase" &&
           doc.ChangePassPhraseRequest.NewPassPhrase.content == "newPassPhrase"
         end
-      end
+      end.returns(fake_response)
       
       Endicia.change_pass_phrase("newPassPhrase", {
         :PassPhrase => "oldPassPhrase",
@@ -213,7 +247,7 @@ class TestEndicia < Test::Unit::TestCase
             doc.ChangePassPhraseRequest.CertifiedIntermediary.AccountID.content == "456789" &&
             doc.ChangePassPhraseRequest.CertifiedIntermediary.PassPhrase.content == "old_phrase"
           end
-        end
+        end.returns(fake_response)
         
         Endicia.change_pass_phrase("new")
       end
@@ -237,18 +271,18 @@ class TestEndicia < Test::Unit::TestCase
       end
     end
     
-    should "include raw response in return hash" do
-      response = stub_everything("response", :inspect => "the raw response")
+    should "include response body in return hash" do
+      response = stub_everything("response", :body => "the response body")
       Endicia.stubs(:post).returns(response)
       result = Endicia.change_pass_phrase("new")
-      assert_equal "the raw response", result[:raw_response]
+      assert_equal "the response body", result[:response_body]
     end    
     
     context 'when successful' do
       setup do
-        Endicia.stubs(:post).returns({
+        Endicia.stubs(:post).returns(fake_response({
           "ChangePassPhraseRequestResponse" => { "Status" => "0" }
-        })
+        }))
       end
       
       should 'return hash with :success => true' do
@@ -259,10 +293,10 @@ class TestEndicia < Test::Unit::TestCase
     
     context 'when not successful' do
       setup do
-        Endicia.stubs(:post).returns({
+        Endicia.stubs(:post).returns(fake_response({
           "ChangePassPhraseRequestResponse" => {
             "Status" => "1", "ErrorMessage" => "the error message" }
-        })
+        }))
       end
   
       should 'return hash with :success => false' do
@@ -294,7 +328,7 @@ class TestEndicia < Test::Unit::TestCase
           doc.RecreditRequest.CertifiedIntermediary.PassPhrase.content == "PassPhrase" &&
           doc.RecreditRequest.RecreditAmount.content == "125.99"
         end
-      end
+      end.returns(fake_response)
       
       Endicia.buy_postage("125.99", {
         :PassPhrase => "PassPhrase",
@@ -319,7 +353,7 @@ class TestEndicia < Test::Unit::TestCase
             doc.RecreditRequest.CertifiedIntermediary.AccountID.content == "456789" &&
             doc.RecreditRequest.CertifiedIntermediary.PassPhrase.content == "my_phrase"
           end
-        end
+        end.returns(fake_response)
         
         Endicia.buy_postage("100")
       end
@@ -343,18 +377,18 @@ class TestEndicia < Test::Unit::TestCase
       end
     end
     
-    should "include raw in return hash" do
-      response = stub_everything("response", :inspect => "the raw response")
+    should "include response body in return hash" do
+      response = stub_everything("response", :body => "the response body")
       Endicia.stubs(:post).returns(response)
       result = Endicia.buy_postage("100")
-      assert_equal "the raw response", result[:raw_response]
+      assert_equal "the response body", result[:response_body]
     end
     
     context 'when successful' do
       setup do
-        Endicia.stubs(:post).returns({
+        Endicia.stubs(:post).returns(fake_response({
           "RecreditRequestResponse" => { "Status" => "0" }
-        })
+        }))
       end
       
       should 'return hash with :success => true' do
@@ -365,10 +399,10 @@ class TestEndicia < Test::Unit::TestCase
     
     context 'when not successful' do
       setup do
-        Endicia.stubs(:post).returns({
+        Endicia.stubs(:post).returns(fake_response({
           "RecreditRequestResponse" => {
             "Status" => "1", "ErrorMessage" => "the error message" }
-        })
+        }))
       end
   
       should 'return hash with :success => false' do
@@ -395,7 +429,7 @@ class TestEndicia < Test::Unit::TestCase
           doc.StatusRequest.Test.content == "YES" &&
           doc.StatusRequest.StatusList.PICNumber.content == "the tracking number"
         end
-      end
+      end.returns(fake_response)
       
       Endicia.status_request("the tracking number", {
         :AccountID => "123456",
@@ -420,21 +454,21 @@ class TestEndicia < Test::Unit::TestCase
             doc.StatusRequest.AccountID.content == "456789" &&
             doc.StatusRequest.PassPhrase.content == "my_phrase"
           end
-        end
+        end.returns(fake_response)
         Endicia.status_request("the tracking number")
       end
     end
     
-    should "include raw in return hash" do
-      response = stub_everything("response", :inspect => "the raw response")
+    should "include response body in return hash" do
+      response = stub_everything("response", :body => "the response body")
       Endicia.stubs(:get).returns(response)
       result = Endicia.status_request("the tracking number")
-      assert_equal "the raw response", result[:raw_response]
+      assert_equal "the response body", result[:response_body]
     end
     
     context 'when successful' do
       setup do
-        Endicia.stubs(:get).returns({
+        Endicia.stubs(:get).returns(fake_response({
           "StatusResponse" => {
             "ErrorMsg" => nil,
             "StatusList" => {
@@ -445,7 +479,7 @@ class TestEndicia < Test::Unit::TestCase
               }
             }
           }
-        })
+        }))
       end
       
       should 'include :success => true in returned hash' do
@@ -461,11 +495,11 @@ class TestEndicia < Test::Unit::TestCase
     
     context 'when not successful' do
       setup do
-        Endicia.stubs(:get).returns({
+        Endicia.stubs(:get).returns(fake_response({
           "StatusResponse" => {
             "ErrorMsg" => "I played your man and he died."
           }
-        })
+        }))
       end
       
       should 'include :success => false in the returned hash' do
@@ -481,7 +515,7 @@ class TestEndicia < Test::Unit::TestCase
     
     context 'when tracking code is not found' do
       setup do
-        Endicia.stubs(:get).returns({
+        Endicia.stubs(:get).returns(fake_response({
           "StatusResponse" => {
             "ErrorMsg" => nil,
             "StatusList" => {
@@ -492,7 +526,7 @@ class TestEndicia < Test::Unit::TestCase
               }
             }
           }
-        })
+        }))
       end
       
       should 'include :success => false in the returned hash' do
@@ -503,6 +537,137 @@ class TestEndicia < Test::Unit::TestCase
       should 'include status message in returned hash' do
         result = Endicia.status_request("the tracking number")
         assert_equal "not found", result[:status]
+      end
+    end
+  end
+
+  context '.refund_request(tracking_number, options)' do
+    should 'make a RefundRequest call to the Endicia API' do
+      Endicia.expects(:get).with do |els_service_url|
+        regex = /http.+&method=RefundRequest&XMLInput=(.+)/
+        els_service_url.match(regex) do |match|
+          doc = Nokogiri::Slop(URI.decode(match[1]))
+          doc.RefundRequest &&
+          doc.RefundRequest.AccountID.content == "123456" &&
+          doc.RefundRequest.PassPhrase.content == "PassPhrase" &&
+          doc.RefundRequest.Test.content == "YES" &&
+          doc.RefundRequest.RefundList.PICNumber.content == "the tracking number"
+        end
+      end.returns(fake_response)
+      
+      Endicia.refund_request("the tracking number", {
+        :AccountID => "123456",
+        :PassPhrase => "PassPhrase",
+        :Test => "YES"
+      })
+    end
+    
+    should 'use options from rails endicia config if present' do
+      attrs = {
+        :PassPhrase => "my_phrase",
+        :AccountID => "456789",
+        :Test => "YES"
+      }
+      
+      with_rails_endicia_config(attrs) do
+        Endicia.expects(:get).with do |els_service_url|
+          regex = /http.+&method=RefundRequest&XMLInput=(.+)/
+          els_service_url.match(regex) do |match|
+            doc = Nokogiri::Slop(URI.decode(match[1]))
+            doc.RefundRequest.Test.content == "YES" &&
+            doc.RefundRequest.AccountID.content == "456789" &&
+            doc.RefundRequest.PassPhrase.content == "my_phrase"
+          end
+        end.returns(fake_response)
+        Endicia.refund_request("the tracking number")
+      end
+    end
+    
+    should "include response body in return hash" do
+      response = stub_everything("response", :body => "the response body")
+      Endicia.stubs(:get).returns(response)
+      result = Endicia.refund_request("the tracking number")
+      assert_equal "the response body", result[:response_body]
+    end
+    
+    context 'when successful' do
+      setup do
+        Endicia.stubs(:get).returns(fake_response({
+          "RefundResponse" => {
+            "ErrorMsg" => nil,
+            "FormNumber" => 567890,
+            "RefundList" => {
+              "PICNumber" => %Q{
+                the tracking number
+                <IsApproved>YES</IsApproved>
+                <ErrorMsg>Approved - Less than 10 days.</ErrorMsg>
+              }
+            }
+          }
+        }))
+      end
+    
+      should 'include :success => true in returned hash' do
+        result = Endicia.refund_request("the tracking number")
+        assert result[:success], "result[:success] should be true but it's #{result[:success].inspect}"
+      end
+
+      should 'include error_message in response' do
+        result = Endicia.refund_request("the tracking number")
+        assert result[:error_message] == 'Approved - Less than 10 days.'
+      end
+
+      should 'include form_number in response' do
+        result = Endicia.refund_request("the tracking number")
+        assert result[:form_number] == 567890
+      end
+    end
+
+    context 'when login not successful' do
+      setup do
+        Endicia.stubs(:get).returns(fake_response({
+          "RefundResponse" => {
+            "ErrorMsg" => "I played your man and he died."
+          }
+        }))
+      end
+      
+      should 'include :success => false in the returned hash' do
+        result = Endicia.refund_request("the tracking number")
+        assert !result[:success], "result[:success] should be false but it's #{result[:success].inspect}"
+      end
+      
+      should 'include error message in the returned hash' do
+        result = Endicia.refund_request("the tracking number")
+        assert_equal "I played your man and he died.", result[:error_message]
+      end
+    end
+
+    context 'when refund not successful' do
+      setup do
+        Endicia.stubs(:get).returns(fake_response({
+          "RefundResponse" => {
+            "ErrorMsg" => nil,
+            "FormNumber" => nil,
+            "RefundList" => {
+              "PICNumber" => %Q{
+                the tracking number
+                <IsApproved>NO</IsApproved>
+                <ErrorMsg>Denied - Must be within 10 days.</ErrorMsg>
+              }
+            }
+          }
+        }))
+      end
+      
+      should 'include :success => false in the returned hash' do
+        result = Endicia.refund_request("the tracking number")
+        assert !result[:success], "result[:success] should be false but it's #{result[:success].inspect}"
+      end
+      
+      should 'include error message in the returned hash' do
+        result = Endicia.refund_request("the tracking number")
+        assert_equal "Denied - Must be within 10 days.", result[:error_message]
       end
     end
   end
@@ -520,7 +685,7 @@ class TestEndicia < Test::Unit::TestCase
           doc.CarrierPickupRequest.PackageLocation.content == "sd" &&
           doc.CarrierPickupRequest.PickupList.PICNumber.content == "the tracking number"
         end
-      end.returns({})
+      end.returns(fake_response)
       
       Endicia.carrier_pickup_request("the tracking number", "sd", {
         :AccountID => "123456",
@@ -547,7 +712,7 @@ class TestEndicia < Test::Unit::TestCase
           doc.CarrierPickupRequest.Phone.content == "1234567890" &&
           doc.CarrierPickupRequest.Extension.content == "12345"
         end
-      end.returns({})
+      end.returns(fake_response)
       
       Endicia.carrier_pickup_request("the tracking number", "sd", {
         :UseAddressOnFile => "N",
@@ -573,7 +738,7 @@ class TestEndicia < Test::Unit::TestCase
           doc.CarrierPickupRequest.PackageLocation.content == "ot" &&
           doc.CarrierPickupRequest.SpecialInstructions.content == "the special instructions"
         end
-      end.returns({})
+      end.returns(fake_response)
       
       Endicia.carrier_pickup_request("the tracking number", "ot", {
         :SpecialInstructions => "the special instructions"
@@ -596,21 +761,21 @@ class TestEndicia < Test::Unit::TestCase
             doc.CarrierPickupRequest.AccountID.content == "456789" &&
             doc.CarrierPickupRequest.PassPhrase.content == "my_phrase"
           end
-        end.returns({})
+        end.returns(fake_response)
         Endicia.carrier_pickup_request("the tracking number", "sd")
       end
     end
     
-    should "include raw response in return hash" do
-      response = stub_everything("response", :inspect => "the raw response")
+    should "include response body in return hash" do
+      response = stub_everything("response", :body => "the response body")
       Endicia.stubs(:get).returns(response)
       result = Endicia.carrier_pickup_request("the tracking number", "sd")
-      assert_equal "the raw response", result[:raw_response]
+      assert_equal "the response body", result[:response_body]
     end
     
     context 'when successful' do
       setup do
-        Endicia.stubs(:get).returns({
+        Endicia.stubs(:get).returns(fake_response({
           "CarrierPickupRequestResponse" => {
             "Response" => {
               "DayOfWeek" => "Monday",
@@ -619,7 +784,7 @@ class TestEndicia < Test::Unit::TestCase
               "ConfirmationNumber" => "abc123"
             }
           }
-        })
+        }))
       end
       
       should 'include :success => true in returned hash' do
@@ -638,11 +803,11 @@ class TestEndicia < Test::Unit::TestCase
     
     context 'when there is an error message' do
       setup do
-        Endicia.stubs(:get).returns({
+        Endicia.stubs(:get).returns(fake_response({
           "CarrierPickupRequestResponse" => {
             "ErrorMsg" => "your ego is out of control"
           }
-        })
+        }))
       end
       
       should 'include :success => false in the returned hash' do
@@ -658,7 +823,7 @@ class TestEndicia < Test::Unit::TestCase
 
     context 'when there is an error code' do
       setup do
-        Endicia.stubs(:get).returns({
+        Endicia.stubs(:get).returns(fake_response({
           "CarrierPickupRequestResponse" => {
             "Response" => {
               "Error" => {
@@ -667,7 +832,7 @@ class TestEndicia < Test::Unit::TestCase
               }
             }
           }
-        })
+        }))
       end
       
       should 'include :success => false in the returned hash' do

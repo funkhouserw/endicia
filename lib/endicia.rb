@@ -12,6 +12,11 @@ module Endicia
   include HTTParty
   extend RailsHelper
   
+  class EndiciaError < StandardError; end
+  class InsuranceError < EndiciaError; end
+  
+  JEWELRY_INSURANCE_EXCLUDED_ZIPS = %w(10036 10017 94102 94108)
+  
   # We need the following to make requests
   # RequesterID (string): Requester ID (also called Partner ID) uniquely identifies the system making the request. Endicia assigns this ID. The Test Server does not authenticate the RequesterID. Any text value of 1 to 50 characters is valid.
   # AccountID (6 digits): Account ID for the Endicia postage account. The Test Server does not authenticate the AccountID. Any 6-digit value is valid.
@@ -48,7 +53,7 @@ module Endicia
     opts = defaults.merge(opts)
     opts[:Test] ||= "NO"
     url = "#{label_service_url(opts)}/GetPostageLabelXML"
-    insurance = opts.delete(:InsuredMail)
+    insurance = extract_insurance(opts)
 
     root_attributes = {
       :LabelType => opts.delete(:LabelType) || "Default",
@@ -65,7 +70,9 @@ module Endicia
     end
     
     result = self.post(url, :body => body)
-    return Endicia::Label.new(result)
+    Endicia::Label.new(result).tap do |the_label|
+      the_label.request_body = body.to_s
+    end
   end
   
   # Change your account pass phrase. This is a required step to move to
@@ -94,7 +101,7 @@ module Endicia
   #     {
   #       :success => true, # or false
   #       :error_message => "the message", # or nil
-  #       :raw_response => <string representation of the HTTParty::Response object>
+  #       :response_body => "the response body"
   #     }
   def self.change_pass_phrase(new_phrase, options = {})
     xml = Builder::XmlMarkup.new
@@ -136,7 +143,7 @@ module Endicia
   #     {
   #       :success => true, # or false
   #       :error_message => "the message", # or nil if no error
-  #       :raw_response => <string representation of the HTTParty::Response object>
+  #       :response_body => "the response body"
   #     }
   def self.buy_postage(amount, options = {})
     xml = Builder::XmlMarkup.new
@@ -173,7 +180,7 @@ module Endicia
   #       :success => true, # or false
   #       :error_message => "the message", # or nil if no error
   #       :status => "the package status", # or nil if error
-  #       :raw_response => <string representation of the HTTParty::Response object>
+  #       :response_body => "the response body"
   #     }
   def self.status_request(tracking_number, options = {})
     xml = Builder::XmlMarkup.new.StatusRequest do |xml|
@@ -190,7 +197,7 @@ module Endicia
       :success => false,
       :error_message => nil,
       :status => nil,
-      :raw_response => result.inspect
+      :response_body => result.body
     }
 
     # TODO: It is possible to make a batch status request, currently this only
@@ -209,6 +216,66 @@ module Endicia
     
     response 
   end
+
+  # Given a tracking number, try and void the label generated in a previous call
+  #
+  # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 11-1
+  # for available/required options.
+  #
+  # Note: options should be specified in a "flat" hash, they should not be
+  # formated to fit the nesting of the XML.
+  #
+  # If you are using rails, any applicable options specified in
+  # config/endicia.yml will be used as defaults. For example:
+  #
+  #     development:
+  #       Test: YES
+  #       AccountID: 123
+  #       ...
+  #
+  # Returns a hash in the form:
+  #
+  #     {
+  #       :success => true, # or false
+  #       :error_message => "the message", # message describing success
+  #                                        # or failure
+  #       :form_number   => 12345, # Form Number for refunded label
+  #       :response_body => "the response body"
+  #     }
+  def self.refund_request(tracking_number, options = {})
+    xml = Builder::XmlMarkup.new.RefundRequest do |xml|
+      xml.AccountID(options[:AccountID] || defaults[:AccountID])
+      xml.PassPhrase(options[:PassPhrase] || defaults[:PassPhrase])
+      xml.Test(options[:Test] || defaults[:Test] || "NO")
+      xml.RefundList { |xml| xml.PICNumber(tracking_number) }
+    end
+  
+    params = { :method => 'RefundRequest', :XMLInput => URI.encode(xml) }
+    result = self.get(els_service_url(params))
+
+    response = {
+      :success => false,
+      :error_message => nil,
+      :response_body => result.body
+    }
+
+    # TODO: It is possible to make a batch refund request, currently this only
+    #       supports one at a time. The response that comes back is not parsed
+    #       well by HTTParty. So we have to assume there is only one IsApproved
+    #       and ErrorMsg in order to return them
+    if result && result = result['RefundResponse']
+      unless response[:error_message] = result['ErrorMsg']
+        response[:form_number]   = result['FormNumber']
+
+        result = result['RefundList']['PICNumber']
+        response[:success]       = (result.match(/<IsApproved>YES<\/IsApproved>/) ? true : false)
+        response[:error_message] = result.match(/<ErrorMsg>(.+)<\/ErrorMsg>/)[1]
+      end
+    end
+
+    response
+  end
+  
   
   # Given a tracking number and package location code,
   # return a carrier pickup confirmation.
@@ -234,7 +301,7 @@ module Endicia
   #       :day_of_week => "pickup day of week (ex: Monday)",
   #       :date => "xx/xx/xxxx", # date of pickup,
   #       :confirmation_number => "confirmation number of the pickup", # save this!
-  #       :raw_response => <string representation of the HTTParty::Response object>
+  #       :response_body => "the response body"
   #     }
   def self.carrier_pickup_request(tracking_number, package_location, options = {})
     xml = Builder::XmlMarkup.new.CarrierPickupRequest do |xml|
@@ -251,7 +318,7 @@ module Endicia
     
     response = {
       :success => false,
-      :raw_response => result.inspect
+      :response_body => result.body
     }
     
     # TODO: this is some nasty logic...
@@ -321,7 +388,7 @@ module Endicia
     parsed_result = {
       :success => false,
       :error_message => nil,
-      :raw_response => result.inspect
+      :response_body => result.body
     }
     
     if result && result[root]
@@ -332,5 +399,15 @@ module Endicia
     
     parsed_result
   end
+  
+  # Handle special case where jewelry can't have insurance if sent to certain zips
+  def self.extract_insurance(opts)
+    opts.delete(:InsuredMail).tap do |insurance|
+      if insurance && insurance == "Endicia" && opts.delete(:Jewelry)
+        if JEWELRY_INSURANCE_EXCLUDED_ZIPS.include? opts[:ToPostalCode]
+          raise InsuranceError, "Can't ship jewelry with insurance to #{opts[:ToPostalCode]}"
+        end
+      end
+    end
+  end
 end
-
