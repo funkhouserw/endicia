@@ -54,6 +54,7 @@ module Endicia
     opts[:Test] ||= "NO"
     url = "#{label_service_url(opts)}/GetPostageLabelXML"
     insurance = extract_insurance(opts)
+	opts = sanitize_params(opts)
 
     root_attributes = {
       :LabelType => opts.delete(:LabelType) || "Default",
@@ -410,4 +411,16 @@ module Endicia
       end
     end
   end
+  
+  def self.sanitize_params(opts)
+	#Sanitize ZIP detect 5+4 zip and split it up
+	if(opts[:ToPostalCode] && opts[:ToPostalCode].length > 5 && opts[:ToPostalCode].length < 15)
+		data = opts[:ToPostalCode].match('(^(\d{5})[\-]?(\d{4})?')
+		opts[:ToPostalCode] = data[1] if data[1]
+		opts[:ToZIP4] = data[2] if data[2]
+	end
+	#TODO: Handle additional params that coule be problimatic
+	return opts
+  end
+  
 end
