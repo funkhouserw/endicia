@@ -54,7 +54,7 @@ module Endicia
     opts[:Test] ||= "NO"
     url = "#{label_service_url(opts)}/GetPostageLabelXML"
     insurance = extract_insurance(opts)
-	opts = sanitize_params(opts)
+	#opts = sanitize_params(opts)
 
     root_attributes = {
       :LabelType => opts.delete(:LabelType) || "Default",
