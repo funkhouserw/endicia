@@ -415,7 +415,7 @@ module Endicia
   def self.sanitize_params(opts)
 	#Sanitize ZIP detect 5+4 zip and split it up
 	if(opts[:ToPostalCode] && opts[:ToPostalCode].length > 5 && opts[:ToPostalCode].length < 15)
-		data = opts[:ToPostalCode].match('(^(\d{5})[\-]?(\d{4})?')
+		data = opts[:ToPostalCode].match('^(\d{5})[\-]?(\d{4})?')
 		opts[:ToPostalCode] = data[1] if data[1]
 		opts[:ToZIP4] = data[2] if data[2]
 	end
