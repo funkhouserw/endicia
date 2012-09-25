@@ -8,15 +8,30 @@ require 'uri'
 require 'endicia/label'
 require 'endicia/rails_helper'
 
+# Hack fix because Endicia sends response back without protocol in xmlns uri
+module HTTParty
+  class Request
+    alias_method :parse_response_without_hack, :parse_response
+    def parse_response(body)
+      Rails.logger.info("RESPONSE>")
+      Rails.logger.info(body)
+      Rails.logger.info("<RESPONSE")
+
+      parse_response_without_hack(
+        body.sub(/xmlns=("|')(www.envmgr.com|LabelServer.Endicia.com)/, 'xmlns=\1https://\2'))
+    end
+  end
+end
+
 module Endicia
   include HTTParty
   extend RailsHelper
-  
+
   class EndiciaError < StandardError; end
   class InsuranceError < EndiciaError; end
-  
+
   JEWELRY_INSURANCE_EXCLUDED_ZIPS = %w(10036 10017 94102 94108)
-  
+
   # We need the following to make requests
   # RequesterID (string): Requester ID (also called Partner ID) uniquely identifies the system making the request. Endicia assigns this ID. The Test Server does not authenticate the RequesterID. Any text value of 1 to 50 characters is valid.
   # AccountID (6 digits): Account ID for the Endicia postage account. The Test Server does not authenticate the AccountID. Any 6-digit value is valid.
@@ -24,10 +39,10 @@ module Endicia
 
   # We probably want the following arguments
   # MailClass, WeightOz, MailpieceShape, Machinable, FromPostalCode
-  
+
   format :xml
   # example XML
-  # <LabelRequest><ReturnAddress1>884 Railroad Street, Suite C</ReturnAddress1><ReturnCity>Ypsilanti</ReturnCity><ReturnState>MI</ReturnState><FromPostalCode>48197</FromPostalCode><FromCity>Ypsilanti</FromCity><FromState>MI</FromState><FromCompany>VGKids</FromCompany><ToPostalCode>48197</ToPostalCode><ToAddress1>1237 Elbridge St</ToAddress1><ToCity>Ypsilanti</ToCity><ToState>MI</ToState><PartnerTransactionID>123</PartnerTransactionID><PartnerCustomerID>71212</PartnerCustomerID><MailClass>MediaMail</MailClass><Test>YES</Test><RequesterID>poopants</RequesterID><AccountID>792190</AccountID><PassPhrase>whiplash1</PassPhrase><WeightOz>10</WeightOz></LabelRequest>  
+  # <LabelRequest><ReturnAddress1>884 Railroad Street, Suite C</ReturnAddress1><ReturnCity>Ypsilanti</ReturnCity><ReturnState>MI</ReturnState><FromPostalCode>48197</FromPostalCode><FromCity>Ypsilanti</FromCity><FromState>MI</FromState><FromCompany>VGKids</FromCompany><ToPostalCode>48197</ToPostalCode><ToAddress1>1237 Elbridge St</ToAddress1><ToCity>Ypsilanti</ToCity><ToState>MI</ToState><PartnerTransactionID>123</PartnerTransactionID><PartnerCustomerID>71212</PartnerCustomerID><MailClass>MediaMail</MailClass><Test>YES</Test><RequesterID>poopants</RequesterID><AccountID>792190</AccountID><PassPhrase>whiplash1</PassPhrase><WeightOz>10</WeightOz></LabelRequest>
 
   # Request a shipping label.
   #
@@ -54,28 +69,43 @@ module Endicia
     opts[:Test] ||= "NO"
     url = "#{label_service_url(opts)}/GetPostageLabelXML"
     insurance = extract_insurance(opts)
-	opts = sanitize_params(opts)
+	#HEAD
+	#opts = sanitize_params(opts)
 
-    root_attributes = {
-      :LabelType => opts.delete(:LabelType) || "Default",
-      :Test => opts.delete(:Test),
-      :LabelSize => opts.delete(:LabelSize),
-      :ImageFormat => opts.delete(:ImageFormat),
-	  :ImageRotation => opts.delete(:ImageRotation)
-    }
-    
+    #root_attributes = {
+    #  :LabelType => opts.delete(:LabelType) || "Default",
+    #  :Test => opts.delete(:Test),
+    #  :LabelSize => opts.delete(:LabelSize),
+    #  :ImageFormat => opts.delete(:ImageFormat),
+	#  :ImageRotation => opts.delete(:ImageRotation)
+    #}
+    handle_extended_zip_code(opts)
+
+    root_keys = :LabelType, :Test, :LabelSize, :ImageFormat, :ImageResolution
+    root_attributes = extract(opts, root_keys)
+    root_attributes[:LabelType] ||= "Default"
+
+    dimension_keys = :Length, :Width, :Height
+    mailpiece_dimenions = extract(opts, dimension_keys)
+
     xml = Builder::XmlMarkup.new
     body = "labelRequestXML=" + xml.LabelRequest(root_attributes) do |xm|
       opts.each { |key, value| xm.tag!(key, value) }
       xm.Services({ :InsuredMail => insurance }) if insurance
+      unless mailpiece_dimenions.empty?
+        xm.MailpieceDimensions do |md|
+          mailpiece_dimenions.each { |key, value| md.tag!(key, value) }
+        end
+      end
     end
-    
+
     result = self.post(url, :body => body)
     Endicia::Label.new(result).tap do |the_label|
       the_label.request_body = body.to_s
+      the_label.request_url = url
     end
   end
-  
+
   # Change your account pass phrase. This is a required step to move to
   # production use after requesting an account.
   #
@@ -158,7 +188,7 @@ module Endicia
     result = self.post(url, { :body => body })
     parse_result(result, "RecreditRequestResponse")
   end
-  
+
   # Given a tracking number, return a status message for the shipment.
   #
   # See https://app.sgizmo.com/users/4508/Endicia_Label_Server.pdf Table 12-1
@@ -188,34 +218,48 @@ module Endicia
       xml.AccountID(options[:AccountID] || defaults[:AccountID])
       xml.PassPhrase(options[:PassPhrase] || defaults[:PassPhrase])
       xml.Test(options[:Test] || defaults[:Test] || "NO")
+      xml.FullStatus(options[:FullStatus] || defaults[:FullStatus] || '')
       xml.StatusList { |xml| xml.PICNumber(tracking_number) }
+    end
+
+    if options[:logger]
+      options[:logger].info("ENDICIA REQUEST: #{tracking_number}")
+      options[:logger].info("\n[REQUEST]")
+      options[:logger].info(xml)
+      options[:logger].info("[ENDREQUEST]")
     end
 
     params = { :method => 'StatusRequest', :XMLInput => URI.encode(xml) }
     result = self.get(els_service_url(params))
-
+    response_body = result.body
+    response_body.gsub!(/<PICNumber>[^<]*/, "<PICNumber>")
     response = {
       :success => false,
       :error_message => nil,
       :status => nil,
-      :response_body => result.body
+      :response_body => response_body
     }
+
+    if options[:logger]
+      options[:logger].info("\n[RESPONSE]")
+      options[:logger].info(xml)
+      options[:logger].info("[ENDRESPONSE]")
+    end
 
     # TODO: It is possible to make a batch status request, currently this only
     #       supports one at a time. The response that comes back is not parsed
     #       well by HTTParty. So we have to assume there is only one tracking
     #       number in order to parse it with a regex.
-    
+
     if result && result = result['StatusResponse']
       unless response[:error_message] = result['ErrorMsg']
-        result = result['StatusList']['PICNumber']
-        response[:status] = result.match(/<Status>(.+)<\/Status>/)[1]
-        status_code = result.match(/<StatusCode>(.+)<\/StatusCode>/)[1]
+        response[:status] = response_body.match(/<Status>(.+)<\/Status>/)[1]
+        status_code = response_body.match(/<StatusCode>(.+)<\/StatusCode>/)[1]
         response[:success] = (status_code.to_s != '-1')
       end
     end
-    
-    response 
+
+    response
   end
 
   # Given a tracking number, try and void the label generated in a previous call
@@ -250,7 +294,7 @@ module Endicia
       xml.Test(options[:Test] || defaults[:Test] || "NO")
       xml.RefundList { |xml| xml.PICNumber(tracking_number) }
     end
-  
+
     params = { :method => 'RefundRequest', :XMLInput => URI.encode(xml) }
     result = self.get(els_service_url(params))
 
@@ -269,15 +313,18 @@ module Endicia
         response[:form_number]   = result['FormNumber']
 
         result = result['RefundList']['PICNumber']
-        response[:success]       = (result.match(/<IsApproved>YES<\/IsApproved>/) ? true : false)
-        response[:error_message] = result.match(/<ErrorMsg>(.+)<\/ErrorMsg>/)[1]
+        # match against the raw response because httpparty seems to be chucking
+        # the invalid xml w/in PICNumber
+        raw_response = response[:response_body]
+        response[:success]       = (raw_response.match(/<IsApproved>YES<\/IsApproved>/) ? true : false)
+        response[:error_message] = raw_response.match(/<ErrorMsg>(.+)<\/ErrorMsg>/)[1]
       end
     end
 
     response
   end
-  
-  
+
+
   # Given a tracking number and package location code,
   # return a carrier pickup confirmation.
   #
@@ -316,12 +363,12 @@ module Endicia
 
     params = { :method => 'CarrierPickupRequest', :XMLInput => URI.encode(xml) }
     result = self.get(els_service_url(params))
-    
+
     response = {
       :success => false,
       :response_body => result.body
     }
-    
+
     # TODO: this is some nasty logic...
     if result && result = result["CarrierPickupRequestResponse"]
       unless response[:error_message] = result['ErrorMsg']
@@ -336,11 +383,20 @@ module Endicia
         end
       end
     end
-    
+
     response
   end
-  
+
   private
+
+  def self.extract(hash, keys)
+    {}.tap do |return_hash|
+      keys.each do |key|
+        value = return_hash[key] = hash.delete(key)
+        return_hash.delete(key) if value.nil? || value.empty?
+      end
+    end
+  end
 
   # Given a builder object, add the auth nodes required for many api calls.
   # Will pull values from options hash or defaults if not found.
@@ -348,14 +404,14 @@ module Endicia
     requester_id = options[:RequesterID] || defaults[:RequesterID]
     account_id   = options[:AccountID]   || defaults[:AccountID]
     pass_phrase  = options[:PassPhrase]  || defaults[:PassPhrase]
-    
+
     xml_builder.RequesterID requester_id
     xml_builder.CertifiedIntermediary do |xml_builder|
       xml_builder.AccountID account_id
       xml_builder.PassPhrase pass_phrase
     end
   end
-  
+
   # Return the url for making requests.
   # Pass options hash with :Test => "YES" to return the url of the test server
   # (this matches the Test attribute/node value for most API calls).
@@ -364,7 +420,7 @@ module Endicia
     url = test ? "https://www.envmgr.com" : "https://LabelServer.Endicia.com"
     "#{url}/LabelService/EwsLabelService.asmx"
   end
-  
+
   # Some requests use the ELS service url. This URL is used for requests that
   # can accept GET, and have params passed via URL instead of a POST body.
   # Pass a hash of params to have them converted to a &key=value string and
@@ -381,7 +437,7 @@ module Endicia
         @defaults = YAML.load_file(config_file)[rails_env].symbolize_keys
       end
     end
-  
+
     @defaults || {}
   end
 
@@ -391,27 +447,28 @@ module Endicia
       :error_message => nil,
       :response_body => result.body
     }
-    
+
     if result && result[root]
       root = result[root]
       parsed_result[:error_message] = root["ErrorMessage"]
       parsed_result[:success] = root["Status"] && root["Status"].to_s == "0"
     end
-    
+
     parsed_result
   end
-  
+
   # Handle special case where jewelry can't have insurance if sent to certain zips
   def self.extract_insurance(opts)
+    jewelry = opts.delete(:Jewelry)
     opts.delete(:InsuredMail).tap do |insurance|
-      if insurance && insurance == "Endicia" && opts.delete(:Jewelry)
+      if insurance && insurance == "Endicia" && jewelry
         if JEWELRY_INSURANCE_EXCLUDED_ZIPS.include? opts[:ToPostalCode]
           raise InsuranceError, "Can't ship jewelry with insurance to #{opts[:ToPostalCode]}"
         end
       end
     end
   end
-  
+
   def self.sanitize_params(opts)
 	#Sanitize ZIP detect 5+4 zip and split it up
 	if(opts[:ToPostalCode] && opts[:ToPostalCode].length > 5 && opts[:ToPostalCode].length < 15)
@@ -422,5 +479,12 @@ module Endicia
 	#TODO: Handle additional params that coule be problimatic
 	return opts
   end
-  
+
+  def self.handle_extended_zip_code(opts)
+    if m = /([0-9]{5})-([0-9]{4})/.match(opts[:ToPostalCode])
+      opts[:ToPostalCode] = m[1]
+      opts[:ToZIP4] = m[2]
+    end
+  end
+
 end
