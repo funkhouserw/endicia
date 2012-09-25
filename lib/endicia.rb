@@ -81,7 +81,7 @@ module Endicia
     #}
     handle_extended_zip_code(opts)
 
-    root_keys = :LabelType, :Test, :LabelSize, :ImageFormat, :ImageResolution
+    root_keys = :LabelType, :Test, :LabelSize, :ImageFormat, :ImageResolution, :ImageRotation
     root_attributes = extract(opts, root_keys)
     root_attributes[:LabelType] ||= "Default"
 
