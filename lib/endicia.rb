@@ -100,10 +100,10 @@ module Endicia
     end
 
     result = self.post(url, :body => body)
-    p "RESULT >>>>>>"
+    p "REQUEST >>>>>>"
     p result
     p body
-    p "<<<<<<< RESULT"
+    p "<<<<<<< REQUEST"
     Endicia::Label.new(result).tap do |the_label|
       the_label.request_body = body.to_s
       the_label.request_url = url
